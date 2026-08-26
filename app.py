@@ -1,8 +1,10 @@
 import io
 import ssl
 import threading
-from datetime import datetime, timedelta
+import cv2
+import numpy as np
 import pandas as pd
+from PIL import Image
 import qrcode
 from reportlab.lib.units import cm
 from reportlab.lib.utils import ImageReader
@@ -10,7 +12,7 @@ from reportlab.pdfgen import canvas
 import requests
 import streamlit as st
 
-# Desactivar verificación estricta de SSL para redes corporativas
+# Configuración HTTPS para entornos corporativos
 try:
     _create_unverified_https_context = ssl._create_unverified_context
 except AttributeError:
@@ -19,14 +21,12 @@ else:
     ssl._create_default_https_context = _create_unverified_https_context
 
 # ==========================================
-# CONFIGURACIÓN GLOBAL Y CONEXIÓN
+# CONFIGURACIÓN GLOBAL
 # ==========================================
 URL_API = "https://script.google.com/macros/s/AKfycbzP3t8MMvpm1e4ak3Jr-xeSukifQocpoMHi2Of8Tppqb-8a0CIFzfmvYXl-wqs3RgQM/exec"
 
 
 def request_api_async(payload):
-    """Envía peticiones POST en segundo plano para no congelar la pantalla del operario."""
-
     def worker():
         try:
             requests.post(URL_API, json=payload, allow_redirects=True)
@@ -37,7 +37,6 @@ def request_api_async(payload):
 
 
 def request_api(payload):
-    """Envía peticiones POST síncronas cuando se requiere respuesta inmediata."""
     try:
         res = requests.post(URL_API, json=payload, allow_redirects=True)
         return res.json()
@@ -46,7 +45,6 @@ def request_api(payload):
 
 
 def fetch_sheet(pestana):
-    """Obtiene datos de una pestaña mediante GET."""
     try:
         res = requests.get(f"{URL_API}?pestana={pestana}")
         if res.status_code == 200:
@@ -58,16 +56,24 @@ def fetch_sheet(pestana):
     return pd.DataFrame()
 
 
-# ==========================================
-# GENERADOR DE ETIQUETA PDF (10 cm x 20 cm)
-# ==========================================
+def decodificar_qr_camara(img_file):
+    """Procesa la imagen tomada por la cámara e intenta extraer el texto del QR."""
+    if img_file is not None:
+        file_bytes = np.asarray(bytearray(img_file.read()), dtype=np.uint8)
+        img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        detector = cv2.QRCodeDetector()
+        data, _, _ = detector.detectAndDecode(img)
+        if data:
+            return data.strip()
+    return None
+
+
 def generar_pdf_etiqueta_bytes(
     id_rollo, ancho, ancho_real, espesor, inspeccion
 ):
     buffer = io.BytesIO()
     ancho_pdf, largo_pdf = 10 * cm, 20 * cm
 
-    # Generar QR en memoria
     qr = qrcode.QRCode(box_size=8, border=2)
     qr.add_data(id_rollo)
     qr.make(fit=True)
@@ -77,10 +83,7 @@ def generar_pdf_etiqueta_bytes(
     img_qr.save(qr_buffer, format="PNG")
     qr_buffer.seek(0)
 
-    # Crear lienzo de la etiqueta
     c = canvas.Canvas(buffer, pagesize=(ancho_pdf, largo_pdf))
-
-    # Encabezado
     c.setFont("Helvetica-Bold", 14)
     c.drawCentredString(ancho_pdf / 2, largo_pdf - 1.2 * cm, "MMPM - SLITTER 1")
     c.setFont("Helvetica-Bold", 10)
@@ -91,7 +94,6 @@ def generar_pdf_etiqueta_bytes(
         0.5 * cm, largo_pdf - 2.1 * cm, ancho_pdf - 0.5 * cm, largo_pdf - 2.1 * cm
     )
 
-    # Detalle de Datos
     c.setFont("Helvetica-Bold", 11)
     y = largo_pdf - 3.2 * cm
     datos = [
@@ -106,7 +108,6 @@ def generar_pdf_etiqueta_bytes(
         c.drawString(0.8 * cm, y, linea)
         y -= 0.85 * cm
 
-    # Inserción de QR (6.5 cm x 6.5 cm)
     qr_img_reader = ImageReader(qr_buffer)
     c.drawImage(
         qr_img_reader,
@@ -123,252 +124,268 @@ def generar_pdf_etiqueta_bytes(
 
 
 # ==========================================
-# AUTENTICACIÓN Y SESIÓN
+# INICIALIZACIÓN DE ESTADO (SESSION STATE)
 # ==========================================
-def login():
-    st.sidebar.title("🔐 Acceso Slitter")
-    with st.sidebar.form("form_login"):
-        usuario = st.text_input("Usuario")
-        contrasena = st.text_input("Contraseña", type="password")
-        submit = st.form_submit_button("Ingresar")
-
-        if submit:
-            res = request_api(
-                {"accion": "login", "Usuario": usuario, "Contrasena": contrasena}
-            )
-            if res.get("exito"):
-                st.session_state["usuario"] = usuario
-                st.session_state["nomina"] = res.get("Nomina")
-                st.session_state["rol"] = res.get("Rol")
-                st.sidebar.success("¡Bienvenido!")
-                st.rerun()
-            else:
-                st.sidebar.error("Credenciales incorrectas")
-
+if "usuario_fullname" not in st.session_state:
+    st.session_state["usuario_fullname"] = None
+if "usuario_nomina" not in st.session_state:
+    st.session_state["usuario_nomina"] = None
+if "pantalla_actual" not in st.session_state:
+    st.session_state["pantalla_actual"] = "login"
+if "paso_verif" not in st.session_state:
+    st.session_state["paso_verif"] = 1
+if "datos_verif" not in st.session_state:
+    st.session_state["datos_verif"] = {
+        "ancho_real": 0.0,
+        "code_molino": "",
+        "code_mmpm": "",
+        "code_job": "",
+    }
 
 # ==========================================
-# INTERFAZ PRINCIPAL
+# 1. PANTALLA DE ACCESO (MÓVIL)
 # ==========================================
-def main():
-    st.set_page_config(
-        page_title="Operación Slitter - Desempaque", layout="wide"
-    )
+st.set_page_config(
+    page_title="Acceso de Personal - Slitter", layout="centered"
+)
 
-    if "usuario" not in st.session_state or st.session_state["usuario"] is None:
-        login()
-        st.title("🏭 Sistema Operativo Slitter")
-        st.info("Por favor, inicia sesión en la barra lateral para continuar.")
-        return
+if st.session_state["pantalla_actual"] == "login":
+    st.markdown("<h1 style='text-align: center;'>🔒 Acceso de Personal</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: gray;'>Ingresa tus datos para acceder al sistema:</p>", unsafe_allow_html=True)
 
-    # Barra lateral de información del usuario
-    st.sidebar.success(
-        f"👤 **{st.session_state['usuario']}**\n\nNómina: {st.session_state['nomina']}\n\nRol: {st.session_state['rol']}"
-    )
+    with st.form("form_acceso_movil"):
+        nombre = st.text_input("Nombre(s)", placeholder="Ej. Edgar")
+        apellido = st.text_input("Apellido(s)", placeholder="Ej. Martinez")
+        nomina = st.text_input("Número de Nómina", placeholder="Ej. 56")
 
-    if st.sidebar.button("Cerrar Sesión"):
-        st.session_state["usuario"] = None
-        st.session_state["rol"] = None
-        st.rerun()
-
-    # Selección de Módulos
-    opciones = ["1. Verificación Inicial de Rollos", "2. Ingreso a Línea Slitter"]
-    if st.session_state["rol"] == "Admin":
-        opciones.append("3. Panel de Administración")
-
-    modulo = st.sidebar.radio("Selecciona Operación:", opciones)
-
-    # ------------------------------------------------------------------
-    # MÓDULO 1: VERIFICACIÓN INICIAL (PASOS 3.1 & 3.11)
-    # ------------------------------------------------------------------
-    if modulo == "1. Verificación Inicial de Rollos":
-        st.header("🔍 Verificación Inicial y Generación de Etiqueta")
-        st.markdown(
-            "Captura la medición real del rollo y escanea las 3 etiquetas de control."
-        )
-
-        with st.form("form_verificacion"):
-            col1, col2 = st.columns(2)
-            with col1:
-                ancho_real = st.number_input(
-                    "📐 Ancho Real Medido (mm)",
-                    min_value=0.0,
-                    step=0.5,
-                    format="%.2f",
-                )
-                code_molino = st.text_input(
-                    "🏷️ Etiqueta Molino", help="Escanea o escribe el código"
-                )
-            with col2:
-                code_mmpm = st.text_input(
-                    "🏷️ Etiqueta MMPM", help="Escanea o escribe el código"
-                )
-                code_job = st.text_input(
-                    "📋 Job Work Order", help="Escanea o escribe el código"
-                )
-
-            btn_verificar = st.form_submit_button(" Validar Datos de Rollos")
-
-        if btn_verificar:
-            if (
-                not code_molino
-                or not code_mmpm
-                or not code_job
-                or ancho_real <= 0
-            ):
-                st.warning("⚠️ Todos los campos son obligatorios.")
-            else:
-                # Lógica de comparación de etiquetas (verificación de coincidencia)
-                # Para prueba: Coinciden si las etiquetas molino y mmpm son idénticas o contienen el mismo ID base
-                molino_clean = code_molino.strip().upper()
-                mmpm_clean = code_mmpm.strip().upper()
-
-                if molino_clean == mmpm_clean:
-                    st.success("✅ **DATOS OK: VERIFICACIÓN CORRECTA**")
-
-                    # Extracción/Simulación de variables técnicas desde el código escaneado
-                    id_rollo = mmpm_clean
-                    ancho_teorico = "965"  # Reemplazar con parseo de tu código
-                    espesor = "2.00"
-                    peso = "10,000"
-                    especificacion = "Estándar Slitter"
-                    inspeccion = "OK"
-
-                    # Registro asíncrono en Google Sheets (Respuesta instantánea < 1 seg)
-                    payload = {
-                        "accion": "registrar_verificacion",
-                        "ID_Rollo": id_rollo,
-                        "Ancho_Teorico": ancho_teorico,
-                        "Ancho_Real": str(ancho_real),
-                        "Espesor": espesor,
-                        "Peso": peso,
-                        "Especificacion": especificacion,
-                        "Inspeccion": inspeccion,
-                        "Estatus_Verificacion": "DATOS OK",
-                        "Quien_Desempaco": st.session_state["usuario"],
-                    }
-                    request_api_async(payload)
-
-                    # Generación de Etiqueta PDF
-                    st.subheader("🖨️ Impresión de Etiqueta de Control")
-                    pdf_bytes = generar_pdf_etiqueta_bytes(
-                        id_rollo,
-                        ancho_teorico,
-                        ancho_real,
-                        espesor,
-                        inspeccion,
-                    )
-
-                    st.download_button(
-                        label="📄 Descargar / Imprimir Etiqueta PDF (10x20 cm)",
-                        data=pdf_bytes,
-                        file_name=f"Etiqueta_{id_rollo}.pdf",
-                        mime="application/pdf",
-                    )
-                else:
-                    st.error(
-                        "⛔ **DATOS NO COINCIDEN, NOTIFICAR A CALIDAD Y AL SUPERIOR DEL ÁREA**"
-                    )
-
-    # ------------------------------------------------------------------
-    # MÓDULO 2: INGRESO A LÍNEA (PASO 3.2)
-    # ------------------------------------------------------------------
-    elif modulo == "2. Ingreso a Línea Slitter":
-        st.header("⚙️ Registro de Ingreso de Rollo a Línea")
-        st.markdown(
-            "Escanea el código QR de la etiqueta recién pegada en el rollo."
-        )
-
-        with st.form("form_ingreso"):
-            code_rollo = st.text_input("📱 Código de Rollo Desempacado (QR)")
-            btn_ingresar = st.form_submit_button(" Confirmar Ingreso a Línea")
+        btn_ingresar = st.form_submit_button("Ingresar", use_container_width=True)
 
         if btn_ingresar:
-            if not code_rollo:
-                st.warning("⚠️ Debes escanear el código del rollo.")
+            if not nombre or not apellido or not nomina:
+                st.warning("⚠️ Por favor completa todos los campos para ingresar.")
             else:
-                id_clean = code_rollo.strip().upper()
-                res = request_api(
-                    {
-                        "accion": "ingreso_linea",
-                        "ID_Rollo": id_clean,
-                        "Quien_Ingreso_Linea": st.session_state["usuario"],
-                    }
-                )
+                full_name = f"{nombre.strip().capitalize()} {apellido.strip().capitalize()}"
+                st.session_state["usuario_fullname"] = full_name
+                st.session_state["usuario_nomina"] = nomina.strip()
+                st.session_state["pantalla_actual"] = "menu_principal"
+                st.rerun()
 
-                if res.get("exito"):
-                    st.success(
-                        f"🎉 Rollo **{id_clean}** ingresado correctamente a la línea Slitter."
-                    )
-                    st.balloons()
-                else:
-                    st.error(f"❌ Error: {res.get('error', 'Rollo no encontrado en la base de datos.')}")
+# ==========================================
+# 2. PANTALLA INICIAL (MENÚ DE OPCIONES)
+# ==========================================
+elif st.session_state["pantalla_actual"] == "menu_principal":
+    st.markdown(f"### 👋 Hola {st.session_state['usuario_fullname']}")
+    st.caption(f"Nómina: {st.session_state['usuario_nomina']}")
+    st.divider()
 
-    # ------------------------------------------------------------------
-    # MÓDULO 3: PANEL DE ADMINISTRACIÓN (SOLO ADMIN)
-    # ------------------------------------------------------------------
-    elif modulo == "3. Panel de Administración":
-        st.header("🛠️ Panel Administrador y Monitoreo de Turno")
+    st.subheader("Selecciona la operación:")
 
-        # Botón a Google Sheets directo
-        st.link_button(
-            "📊 Abrir Google Sheets Completo",
-            "https://docs.google.com/spreadsheets/",
+    if st.button("🔍 Verificación Inicial", use_container_width=True, type="primary"):
+        st.session_state["paso_verif"] = 1
+        st.session_state["datos_verif"] = {
+            "ancho_real": 0.0,
+            "code_molino": "",
+            "code_mmpm": "",
+            "code_job": "",
+        }
+        st.session_state["pantalla_actual"] = "verificacion_pasos"
+        st.rerun()
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    if st.button("⚙️ Entrada de Rollo a Línea", use_container_width=True):
+        st.session_state["pantalla_actual"] = "ingreso_linea"
+        st.rerun()
+
+    st.divider()
+    if st.button("🚪 Salir de la Cuenta", use_container_width=True):
+        st.session_state["pantalla_actual"] = "login"
+        st.session_state["usuario_fullname"] = None
+        st.rerun()
+
+# ==========================================
+# 3. INTERFAZ DE VERIFICACIÓN INICIAL (PASO A PASO)
+# ==========================================
+elif st.session_state["pantalla_actual"] == "verificacion_pasos":
+    paso = st.session_state["paso_verif"]
+
+    # PASO 1: ANCHO REAL
+    if paso == 1:
+        st.subheader("Paso 1: Ancho Real del Rollo")
+        st.write("Realiza la medición física del rollo e ingresa el dato:")
+
+        ancho_val = st.number_input(
+            "📐 Ancho Real (mm)",
+            min_value=0.0,
+            step=0.5,
+            format="%.2f",
+            value=st.session_state["datos_verif"]["ancho_real"],
         )
-        st.divider()
 
-        tab1, tab2 = st.tabs(["📦 Rollos de Último Turno", "👥 Gestión de Personal"])
-
-        # Vista del Último Turno
-        with tab1:
-            st.subheader("Rollos Procesados en el Último Turno (Últimas 8 Horas)")
-            df_rollos = fetch_sheet("Registro_Rollos")
-
-            if not df_rollos.empty:
-                st.dataframe(df_rollos, use_container_width=True)
+        if st.button("Continuar ➡️", use_container_width=True, type="primary"):
+            if ancho_val <= 0:
+                st.warning("⚠️ Ingresa un valor válido de ancho real.")
             else:
-                st.info("No hay registros disponibles en la base de datos.")
+                st.session_state["datos_verif"]["ancho_real"] = ancho_val
+                st.session_state["paso_verif"] = 2
+                st.rerun()
 
-        # Gestión de Usuarios
-        with tab2:
-            st.subheader("Personal Registrado")
-            df_users = fetch_sheet("Usuarios")
-            if not df_users.empty:
-                st.dataframe(df_users, use_container_width=True)
+    # PASO 2: ETIQUETA MOLINO
+    elif paso == 2:
+        st.subheader("Paso 2: Captura Etiqueta Molino")
+        st.write("Usa la cámara del dispositivo para escanear el código:")
 
-            col_a, col_b = st.columns(2)
-            with col_a:
-                with st.form("form_add_user"):
-                    st.markdown("**Agregar Usuario**")
-                    u_user = st.text_input("Usuario")
-                    u_nom = st.text_input("Nómina")
-                    u_pass = st.text_input("Contraseña", type="password")
-                    u_rol = st.selectbox("Rol", ["Operario", "Admin"])
-                    if st.form_submit_button("Crear Cuenta"):
-                        res = request_api(
-                            {
-                                "accion": "agregar_usuario",
-                                "Usuario": u_user,
-                                "Nomina": u_nom,
-                                "Contrasena": u_pass,
-                                "Rol": u_rol,
-                            }
-                        )
-                        if res.get("exito"):
-                            st.success("Usuario agregado.")
-                            st.rerun()
+        cam_molino = st.camera_input("Escanear Etiqueta Molino", key="cam_molino")
+        code_detectado = decodificar_qr_camara(cam_molino)
 
-            with col_b:
-                with st.form("form_del_user"):
-                    st.markdown("**Eliminar Usuario**")
-                    u_del = st.text_input("Nombre de Usuario a eliminar")
-                    if st.form_submit_button("Eliminar Cuenta"):
-                        res = request_api(
-                            {"accion": "eliminar_usuario", "Usuario": u_del}
-                        )
-                        if res.get("exito"):
-                            st.success("Usuario eliminado.")
-                            st.rerun()
+        code_input = st.text_input(
+            "Código detectado / Entrada Manual:",
+            value=code_detectado if code_detectado else st.session_state["datos_verif"]["code_molino"],
+        )
 
+        if st.button("Continuar ➡️", use_container_width=True, type="primary"):
+            if not code_input:
+                st.warning("⚠️ Debes capturar o ingresar el código de la Etiqueta Molino.")
+            else:
+                st.session_state["datos_verif"]["code_molino"] = code_input.strip()
+                st.session_state["paso_verif"] = 3
+                st.rerun()
 
-if __name__ == "__main__":
-    main()
+    # PASO 3: ETIQUETA MMPM
+    elif paso == 3:
+        st.subheader("Paso 3: Captura Etiqueta MMPM")
+        st.write("Usa la cámara del dispositivo para escanear el código:")
+
+        cam_mmpm = st.camera_input("Escanear Etiqueta MMPM", key="cam_mmpm")
+        code_detectado = decodificar_qr_camara(cam_mmpm)
+
+        code_input = st.text_input(
+            "Código detectado / Entrada Manual:",
+            value=code_detectado if code_detectado else st.session_state["datos_verif"]["code_mmpm"],
+        )
+
+        if st.button("Continuar ➡️", use_container_width=True, type="primary"):
+            if not code_input:
+                st.warning("⚠️ Debes capturar o ingresar el código de la Etiqueta MMPM.")
+            else:
+                st.session_state["datos_verif"]["code_mmpm"] = code_input.strip()
+                st.session_state["paso_verif"] = 4
+                st.rerun()
+
+    # PASO 4: JOB WORK ORDER
+    elif paso == 4:
+        st.subheader("Paso 4: Captura Job Work Order")
+        st.write("Usa la cámara para escanear la orden de trabajo:")
+
+        cam_job = st.camera_input("Escanear Job Work Order", key="cam_job")
+        code_detectado = decodificar_qr_camara(cam_job)
+
+        code_input = st.text_input(
+            "Código detectado / Entrada Manual:",
+            value=code_detectado if code_detectado else st.session_state["datos_verif"]["code_job"],
+        )
+
+        if st.button("Finalizar Verificación 🏁", use_container_width=True, type="primary"):
+            if not code_input:
+                st.warning("⚠️ Debes capturar o ingresar el código del Job Work Order.")
+            else:
+                st.session_state["datos_verif"]["code_job"] = code_input.strip()
+                st.session_state["paso_verif"] = 5
+                st.rerun()
+
+    # PASO 5: VALIDACIÓN Y EVALUACIÓN
+    elif paso == 5:
+        datos = st.session_state["datos_verif"]
+        molino_clean = datos["code_molino"].upper()
+        mmpm_clean = datos["code_mmpm"].upper()
+
+        # Evaluación de datos
+        if molino_clean == mmpm_clean:
+            st.success("✅ **DATOS OK: VERIFICACIÓN CORRECTA**")
+
+            id_rollo = mmpm_clean
+            ancho_teorico = "965"
+            espesor = "2.00"
+            peso = "10,000"
+            especificacion = "Estándar Slitter"
+            inspeccion = "OK"
+
+            # Guardar en base de datos de forma asíncrona
+            payload = {
+                "accion": "registrar_verificacion",
+                "ID_Rollo": id_rollo,
+                "Ancho_Teorico": ancho_teorico,
+                "Ancho_Real": str(datos["ancho_real"]),
+                "Espesor": espesor,
+                "Peso": peso,
+                "Especificacion": especificacion,
+                "Inspeccion": inspeccion,
+                "Estatus_Verificacion": "DATOS OK",
+                "Quien_Desempaco": st.session_state["usuario_fullname"],
+            }
+            request_api_async(payload)
+
+            st.divider()
+            st.subheader("🖨️ Etiqueta de Control Generada")
+            pdf_bytes = generar_pdf_etiqueta_bytes(
+                id_rollo,
+                ancho_teorico,
+                datos["ancho_real"],
+                espesor,
+                inspeccion,
+            )
+
+            st.download_button(
+                label="📄 Imprimir / Descargar Etiqueta PDF (10x20 cm)",
+                data=pdf_bytes,
+                file_name=f"Etiqueta_{id_rollo}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                type="primary",
+            )
+        else:
+            st.error("⛔ **DATOS NO COINCIDEN, NOTIFICAR A CALIDAD Y AL SUPERIOR DEL ÁREA**")
+
+        st.divider()
+        if st.button("🏠 Volver al Menú Principal", use_container_width=True):
+            st.session_state["pantalla_actual"] = "menu_principal"
+            st.rerun()
+
+# ==========================================
+# 4. INTERFAZ DE INGRESO DE ROLLO A LÍNEA
+# ==========================================
+elif st.session_state["pantalla_actual"] == "ingreso_linea":
+    st.subheader("⚙️ Entrada de Rollo a Línea")
+    st.write("Escanea el código QR de la etiqueta recién pegada en el rollo:")
+
+    cam_ingreso = st.camera_input("Escanear Código del Rollo (QR)", key="cam_ingreso")
+    code_detectado = decodificar_qr_camara(cam_ingreso)
+
+    code_input = st.text_input(
+        "Código detectado / Entrada Manual:",
+        value=code_detectado if code_detectado else "",
+    )
+
+    if st.button("Confirmar Ingreso a Línea", use_container_width=True, type="primary"):
+        if not code_input:
+            st.warning("⚠️ Captura o ingresa el código del rollo desempacado.")
+        else:
+            id_clean = code_input.strip().upper()
+            res = request_api(
+                {
+                    "accion": "ingreso_linea",
+                    "ID_Rollo": id_clean,
+                    "Quien_Ingreso_Linea": st.session_state["usuario_fullname"],
+                }
+            )
+
+            if res.get("exito"):
+                st.success(f"🎉 Rollo **{id_clean}** ingresado a la línea correctamente.")
+                st.balloons()
+            else:
+                st.error(f"❌ Error: {res.get('error', 'ID no encontrado.')}")
+
+    st.divider()
+    if st.button("🏠 Volver al Menú Principal", use_container_width=True):
+        st.session_state["pantalla_actual"] = "menu_principal"
+        st.rerun()
