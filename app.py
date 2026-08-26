@@ -75,10 +75,11 @@ def decodificar_qr_camara(img_file):
 def generar_pdf_etiqueta_bytes(
     id_rollo, ancho, ancho_real, espesor, inspeccion
 ):
-    """Genera la etiqueta en PDF con formato exacto de 10 cm x 20 cm."""
+    """Genera la etiqueta en PDF (10 cm x 20 cm) codificando SOLO el ID_Rollo en el QR para lectura ultrarrápida."""
     buffer = io.BytesIO()
     ancho_pdf, largo_pdf = 10 * cm, 20 * cm
 
+    # QR codifica únicamente el ID único (evita saturación y facilita escaneo)
     qr = qrcode.QRCode(box_size=8, border=2)
     qr.add_data(id_rollo)
     qr.make(fit=True)
@@ -150,7 +151,7 @@ if "datos_verif" not in st.session_state:
     }
 
 st.set_page_config(
-    page_title="Acceso de Personal - Slitter", layout="centered"
+    page_title="Entrada de Rollos a Slitter", layout="centered"
 )
 
 # ==========================================
@@ -158,7 +159,7 @@ st.set_page_config(
 # ==========================================
 if st.session_state["pantalla_actual"] == "login":
     st.markdown(
-        "<h1 style='text-align: center;'>🔒 Acceso de Personal</h1>",
+        "<h1 style='text-align: center;'>🔒 Entrada de Rollos a Slitter</h1>",
         unsafe_allow_html=True,
     )
     st.markdown(
@@ -468,10 +469,10 @@ elif st.session_state["pantalla_actual"] == "panel_admin":
     )
     st.divider()
 
-    tab1, tab2 = st.tabs(["📦 Rollos de Último Turno", "👥 Gestión de Personal"])
+    tab1, tab2 = st.tabs(["📦 Rollos Registrados", "👥 Gestión de Personal"])
 
     with tab1:
-        st.subheader("Rollos Registrados")
+        st.subheader("Bitácora de Rollos")
         df_rollos = fetch_sheet("Registro_Rollos")
         if not df_rollos.empty:
             st.dataframe(df_rollos, use_container_width=True)
