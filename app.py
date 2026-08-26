@@ -12,7 +12,7 @@ from reportlab.pdfgen import canvas
 import requests
 import streamlit as st
 
-# Configuración HTTPS para entornos corporativos
+# Configuración HTTPS para redes corporativas
 try:
     _create_unverified_https_context = ssl._create_unverified_context
 except AttributeError:
@@ -27,6 +27,8 @@ URL_API = "https://script.google.com/macros/s/AKfycbzP3t8MMvpm1e4ak3Jr-xeSukifQo
 
 
 def request_api_async(payload):
+    """Envía peticiones POST en segundo plano para no congelar la pantalla del celular."""
+
     def worker():
         try:
             requests.post(URL_API, json=payload, allow_redirects=True)
@@ -37,6 +39,7 @@ def request_api_async(payload):
 
 
 def request_api(payload):
+    """Envía peticiones POST síncronas cuando se requiere respuesta inmediata."""
     try:
         res = requests.post(URL_API, json=payload, allow_redirects=True)
         return res.json()
@@ -45,6 +48,7 @@ def request_api(payload):
 
 
 def fetch_sheet(pestana):
+    """Obtiene datos de una pestaña mediante GET."""
     try:
         res = requests.get(f"{URL_API}?pestana={pestana}")
         if res.status_code == 200:
@@ -71,6 +75,7 @@ def decodificar_qr_camara(img_file):
 def generar_pdf_etiqueta_bytes(
     id_rollo, ancho, ancho_real, espesor, inspeccion
 ):
+    """Genera la etiqueta en PDF con formato exacto de 10 cm x 20 cm."""
     buffer = io.BytesIO()
     ancho_pdf, largo_pdf = 10 * cm, 20 * cm
 
@@ -130,6 +135,8 @@ if "usuario_fullname" not in st.session_state:
     st.session_state["usuario_fullname"] = None
 if "usuario_nomina" not in st.session_state:
     st.session_state["usuario_nomina"] = None
+if "rol" not in st.session_state:
+    st.session_state["rol"] = None
 if "pantalla_actual" not in st.session_state:
     st.session_state["pantalla_actual"] = "login"
 if "paso_verif" not in st.session_state:
@@ -142,45 +149,73 @@ if "datos_verif" not in st.session_state:
         "code_job": "",
     }
 
-# ==========================================
-# 1. PANTALLA DE ACCESO (MÓVIL)
-# ==========================================
 st.set_page_config(
     page_title="Acceso de Personal - Slitter", layout="centered"
 )
 
+# ==========================================
+# 1. PANTALLA DE ACCESO (MÓVIL)
+# ==========================================
 if st.session_state["pantalla_actual"] == "login":
-    st.markdown("<h1 style='text-align: center;'>🔒 Acceso de Personal</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: gray;'>Ingresa tus datos para acceder al sistema:</p>", unsafe_allow_html=True)
+    st.markdown(
+        "<h1 style='text-align: center;'>🔒 Acceso de Personal</h1>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<p style='text-align: center; color: gray;'>Ingresa tus datos para acceder al sistema:</p>",
+        unsafe_allow_html=True,
+    )
 
     with st.form("form_acceso_movil"):
         nombre = st.text_input("Nombre(s)", placeholder="Ej. Edgar")
         apellido = st.text_input("Apellido(s)", placeholder="Ej. Martinez")
         nomina = st.text_input("Número de Nómina", placeholder="Ej. 56")
 
-        btn_ingresar = st.form_submit_button("Ingresar", use_container_width=True)
+        btn_ingresar = st.form_submit_button(
+            "Ingresar", use_container_width=True
+        )
 
         if btn_ingresar:
             if not nombre or not apellido or not nomina:
-                st.warning("⚠️ Por favor completa todos los campos para ingresar.")
+                st.warning(
+                    "⚠️ Por favor completa todos los campos para ingresar."
+                )
             else:
-                full_name = f"{nombre.strip().capitalize()} {apellido.strip().capitalize()}"
-                st.session_state["usuario_fullname"] = full_name
-                st.session_state["usuario_nomina"] = nomina.strip()
-                st.session_state["pantalla_actual"] = "menu_principal"
-                st.rerun()
+                res = request_api({
+                    "accion": "login",
+                    "Nombre": nombre.strip(),
+                    "Apellido": apellido.strip(),
+                    "Nomina": nomina.strip(),
+                })
+
+                if res.get("exito"):
+                    st.session_state["usuario_fullname"] = res.get(
+                        "NombreCompleto"
+                    )
+                    st.session_state["usuario_nomina"] = res.get("Nomina")
+                    st.session_state["rol"] = res.get("Rol")
+                    st.session_state["pantalla_actual"] = "menu_principal"
+                    st.rerun()
+                else:
+                    st.error(
+                        f"❌ {res.get('error', 'Nombre, Apellido o Nómina no válidos.')}"
+                    )
 
 # ==========================================
 # 2. PANTALLA INICIAL (MENÚ DE OPCIONES)
 # ==========================================
 elif st.session_state["pantalla_actual"] == "menu_principal":
     st.markdown(f"### 👋 Hola {st.session_state['usuario_fullname']}")
-    st.caption(f"Nómina: {st.session_state['usuario_nomina']}")
+    st.caption(
+        f"Nómina: {st.session_state['usuario_nomina']} | Rol: {st.session_state['rol']}"
+    )
     st.divider()
 
     st.subheader("Selecciona la operación:")
 
-    if st.button("🔍 Verificación Inicial", use_container_width=True, type="primary"):
+    if st.button(
+        "🔍 Verificación Inicial", use_container_width=True, type="primary"
+    ):
         st.session_state["paso_verif"] = 1
         st.session_state["datos_verif"] = {
             "ancho_real": 0.0,
@@ -197,10 +232,17 @@ elif st.session_state["pantalla_actual"] == "menu_principal":
         st.session_state["pantalla_actual"] = "ingreso_linea"
         st.rerun()
 
+    if st.session_state["rol"] == "Admin":
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🛠️ Panel de Administración", use_container_width=True):
+            st.session_state["pantalla_actual"] = "panel_admin"
+            st.rerun()
+
     st.divider()
     if st.button("🚪 Salir de la Cuenta", use_container_width=True):
         st.session_state["pantalla_actual"] = "login"
         st.session_state["usuario_fullname"] = None
+        st.session_state["rol"] = None
         st.rerun()
 
 # ==========================================
@@ -233,40 +275,50 @@ elif st.session_state["pantalla_actual"] == "verificacion_pasos":
     # PASO 2: ETIQUETA MOLINO
     elif paso == 2:
         st.subheader("Paso 2: Captura Etiqueta Molino")
-        st.write("Usa la cámara del dispositivo para escanear el código:")
+        st.write("Usa la cámara del celular para escanear el código:")
 
         cam_molino = st.camera_input("Escanear Etiqueta Molino", key="cam_molino")
         code_detectado = decodificar_qr_camara(cam_molino)
 
         code_input = st.text_input(
             "Código detectado / Entrada Manual:",
-            value=code_detectado if code_detectado else st.session_state["datos_verif"]["code_molino"],
+            value=code_detectado
+            if code_detectado
+            else st.session_state["datos_verif"]["code_molino"],
         )
 
         if st.button("Continuar ➡️", use_container_width=True, type="primary"):
             if not code_input:
-                st.warning("⚠️ Debes capturar o ingresar el código de la Etiqueta Molino.")
+                st.warning(
+                    "⚠️ Debes capturar o ingresar el código de la Etiqueta Molino."
+                )
             else:
-                st.session_state["datos_verif"]["code_molino"] = code_input.strip()
+                st.session_state["datos_verif"]["code_molino"] = (
+                    code_input.strip()
+                )
                 st.session_state["paso_verif"] = 3
                 st.rerun()
 
     # PASO 3: ETIQUETA MMPM
     elif paso == 3:
         st.subheader("Paso 3: Captura Etiqueta MMPM")
-        st.write("Usa la cámara del dispositivo para escanear el código:")
+        st.write("Usa la cámara del celular para escanear el código:")
 
         cam_mmpm = st.camera_input("Escanear Etiqueta MMPM", key="cam_mmpm")
         code_detectado = decodificar_qr_camara(cam_mmpm)
 
         code_input = st.text_input(
             "Código detectado / Entrada Manual:",
-            value=code_detectado if code_detectado else st.session_state["datos_verif"]["code_mmpm"],
+            value=code_detectado
+            if code_detectado
+            else st.session_state["datos_verif"]["code_mmpm"],
         )
 
         if st.button("Continuar ➡️", use_container_width=True, type="primary"):
             if not code_input:
-                st.warning("⚠️ Debes capturar o ingresar el código de la Etiqueta MMPM.")
+                st.warning(
+                    "⚠️ Debes capturar o ingresar el código de la Etiqueta MMPM."
+                )
             else:
                 st.session_state["datos_verif"]["code_mmpm"] = code_input.strip()
                 st.session_state["paso_verif"] = 4
@@ -282,12 +334,20 @@ elif st.session_state["pantalla_actual"] == "verificacion_pasos":
 
         code_input = st.text_input(
             "Código detectado / Entrada Manual:",
-            value=code_detectado if code_detectado else st.session_state["datos_verif"]["code_job"],
+            value=code_detectado
+            if code_detectado
+            else st.session_state["datos_verif"]["code_job"],
         )
 
-        if st.button("Finalizar Verificación 🏁", use_container_width=True, type="primary"):
+        if st.button(
+            "Finalizar Verificación 🏁",
+            use_container_width=True,
+            type="primary",
+        ):
             if not code_input:
-                st.warning("⚠️ Debes capturar o ingresar el código del Job Work Order.")
+                st.warning(
+                    "⚠️ Debes capturar o ingresar el código del Job Work Order."
+                )
             else:
                 st.session_state["datos_verif"]["code_job"] = code_input.strip()
                 st.session_state["paso_verif"] = 5
@@ -299,7 +359,6 @@ elif st.session_state["pantalla_actual"] == "verificacion_pasos":
         molino_clean = datos["code_molino"].upper()
         mmpm_clean = datos["code_mmpm"].upper()
 
-        # Evaluación de datos
         if molino_clean == mmpm_clean:
             st.success("✅ **DATOS OK: VERIFICACIÓN CORRECTA**")
 
@@ -310,7 +369,6 @@ elif st.session_state["pantalla_actual"] == "verificacion_pasos":
             especificacion = "Estándar Slitter"
             inspeccion = "OK"
 
-            # Guardar en base de datos de forma asíncrona
             payload = {
                 "accion": "registrar_verificacion",
                 "ID_Rollo": id_rollo,
@@ -344,7 +402,9 @@ elif st.session_state["pantalla_actual"] == "verificacion_pasos":
                 type="primary",
             )
         else:
-            st.error("⛔ **DATOS NO COINCIDEN, NOTIFICAR A CALIDAD Y AL SUPERIOR DEL ÁREA**")
+            st.error(
+                "⛔ **DATOS NO COINCIDEN, NOTIFICAR A CALIDAD Y AL SUPERIOR DEL ÁREA**"
+            )
 
         st.divider()
         if st.button("🏠 Volver al Menú Principal", use_container_width=True):
@@ -358,7 +418,9 @@ elif st.session_state["pantalla_actual"] == "ingreso_linea":
     st.subheader("⚙️ Entrada de Rollo a Línea")
     st.write("Escanea el código QR de la etiqueta recién pegada en el rollo:")
 
-    cam_ingreso = st.camera_input("Escanear Código del Rollo (QR)", key="cam_ingreso")
+    cam_ingreso = st.camera_input(
+        "Escanear Código del Rollo (QR)", key="cam_ingreso"
+    )
     code_detectado = decodificar_qr_camara(cam_ingreso)
 
     code_input = st.text_input(
@@ -366,24 +428,94 @@ elif st.session_state["pantalla_actual"] == "ingreso_linea":
         value=code_detectado if code_detectado else "",
     )
 
-    if st.button("Confirmar Ingreso a Línea", use_container_width=True, type="primary"):
+    if st.button(
+        "Confirmar Ingreso a Línea", use_container_width=True, type="primary"
+    ):
         if not code_input:
             st.warning("⚠️ Captura o ingresa el código del rollo desempacado.")
         else:
             id_clean = code_input.strip().upper()
-            res = request_api(
-                {
-                    "accion": "ingreso_linea",
-                    "ID_Rollo": id_clean,
-                    "Quien_Ingreso_Linea": st.session_state["usuario_fullname"],
-                }
-            )
+            res = request_api({
+                "accion": "ingreso_linea",
+                "ID_Rollo": id_clean,
+                "Quien_Ingreso_Linea": st.session_state["usuario_fullname"],
+            })
 
             if res.get("exito"):
-                st.success(f"🎉 Rollo **{id_clean}** ingresado a la línea correctamente.")
+                st.success(
+                    f"🎉 Rollo **{id_clean}** ingresado a la línea correctamente."
+                )
                 st.balloons()
             else:
-                st.error(f"❌ Error: {res.get('error', 'ID no encontrado.')}")
+                st.error(
+                    f"❌ Error: {res.get('error', 'ID no encontrado en la base de datos.')}"
+                )
+
+    st.divider()
+    if st.button("🏠 Volver al Menú Principal", use_container_width=True):
+        st.session_state["pantalla_actual"] = "menu_principal"
+        st.rerun()
+
+# ==========================================
+# 5. PANEL DE ADMINISTRACIÓN (SOLO ADMIN)
+# ==========================================
+elif st.session_state["pantalla_actual"] == "panel_admin":
+    st.header("🛠️ Panel Administrador y Monitoreo")
+
+    st.link_button(
+        "📊 Abrir Google Sheets Completo",
+        "https://docs.google.com/spreadsheets/",
+    )
+    st.divider()
+
+    tab1, tab2 = st.tabs(["📦 Rollos de Último Turno", "👥 Gestión de Personal"])
+
+    with tab1:
+        st.subheader("Rollos Registrados")
+        df_rollos = fetch_sheet("Registro_Rollos")
+        if not df_rollos.empty:
+            st.dataframe(df_rollos, use_container_width=True)
+        else:
+            st.info("No hay registros disponibles.")
+
+    with tab2:
+        st.subheader("Plantilla de Personal Registrada")
+        df_users = fetch_sheet("Usuarios")
+        if not df_users.empty:
+            st.dataframe(df_users, use_container_width=True)
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            with st.form("form_add_user"):
+                st.markdown("**Agregar Integrante**")
+                u_nom = st.text_input("Nombre(s)")
+                u_ape = st.text_input("Apellido(s)")
+                u_nomina = st.text_input("Nómina")
+                u_rol = st.selectbox("Rol", ["Operario", "Admin"])
+                if st.form_submit_button("Crear Cuenta"):
+                    res = request_api({
+                        "accion": "agregar_usuario",
+                        "Nombre": u_nom,
+                        "Apellido": u_ape,
+                        "Nomina": u_nomina,
+                        "Rol": u_rol,
+                    })
+                    if res.get("exito"):
+                        st.success("Usuario agregado.")
+                        st.rerun()
+
+        with col_b:
+            with st.form("form_del_user"):
+                st.markdown("**Eliminar Integrante**")
+                u_del_nom = st.text_input("Número de Nómina a eliminar")
+                if st.form_submit_button("Eliminar Cuenta"):
+                    res = request_api({
+                        "accion": "eliminar_usuario",
+                        "Nomina": u_del_nom,
+                    })
+                    if res.get("exito"):
+                        st.success("Usuario eliminado.")
+                        st.rerun()
 
     st.divider()
     if st.button("🏠 Volver al Menú Principal", use_container_width=True):
