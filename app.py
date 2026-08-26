@@ -72,6 +72,40 @@ def decodificar_qr_camara(img_file):
     return None
 
 
+def parsear_codigo_qr(texto):
+    """Desglosa una cadena delimitada por tuberías '|' en sus componentes individuales."""
+    if not texto:
+        return {
+            "id_rollo": "",
+            "ancho_teorico": "N/A",
+            "espesor": "N/A",
+            "peso": "N/A",
+            "especificacion": "N/A",
+            "inspeccion": "OK",
+        }
+
+    partes = [p.strip() for p in texto.split("|")]
+
+    if len(partes) > 1:
+        return {
+            "id_rollo": partes[0],
+            "ancho_teorico": partes[1] if len(partes) > 1 else "N/A",
+            "espesor": partes[2] if len(partes) > 2 else "N/A",
+            "peso": partes[3] if len(partes) > 3 else "N/A",
+            "especificacion": partes[4] if len(partes) > 4 else "N/A",
+            "inspeccion": partes[5] if len(partes) > 5 else "OK",
+        }
+    else:
+        return {
+            "id_rollo": partes[0],
+            "ancho_teorico": "N/A",
+            "espesor": "N/A",
+            "peso": "N/A",
+            "especificacion": "Estándar Slitter",
+            "inspeccion": "OK",
+        }
+
+
 def generar_pdf_etiqueta_bytes(
     id_rollo, ancho, ancho_real, espesor, inspeccion
 ):
@@ -79,7 +113,6 @@ def generar_pdf_etiqueta_bytes(
     buffer = io.BytesIO()
     ancho_pdf, largo_pdf = 10 * cm, 20 * cm
 
-    # QR codifica únicamente el ID único (evita saturación y facilita escaneo)
     qr = qrcode.QRCode(box_size=8, border=2)
     qr.add_data(id_rollo)
     qr.make(fit=True)
@@ -150,9 +183,7 @@ if "datos_verif" not in st.session_state:
         "code_job": "",
     }
 
-st.set_page_config(
-    page_title="Entrada de Rollos a Slitter", layout="centered"
-)
+st.set_page_config(page_title="Entrada de Rollos a Slitter", layout="centered")
 
 # ==========================================
 # 1. PANTALLA DE ACCESO (MÓVIL)
@@ -357,18 +388,25 @@ elif st.session_state["pantalla_actual"] == "verificacion_pasos":
     # PASO 5: VALIDACIÓN Y EVALUACIÓN
     elif paso == 5:
         datos = st.session_state["datos_verif"]
-        molino_clean = datos["code_molino"].upper()
-        mmpm_clean = datos["code_mmpm"].upper()
 
-        if molino_clean == mmpm_clean:
+        # Parsear las cadenas escaneadas delimitadas por tuberías '|'
+        parsed_molino = parsear_codigo_qr(datos["code_molino"])
+        parsed_mmpm = parsear_codigo_qr(datos["code_mmpm"])
+
+        # Comparar únicamente los identificadores únicos extraídos
+        id_molino = parsed_molino["id_rollo"].upper()
+        id_mmpm = parsed_mmpm["id_rollo"].upper()
+
+        if id_molino == id_mmpm and id_mmpm != "":
             st.success("✅ **DATOS OK: VERIFICACIÓN CORRECTA**")
 
-            id_rollo = mmpm_clean
-            ancho_teorico = "965"
-            espesor = "2.00"
-            peso = "10,000"
-            especificacion = "Estándar Slitter"
-            inspeccion = "OK"
+            # Extracción de variables limpias desglosadas
+            id_rollo = parsed_mmpm["id_rollo"]
+            ancho_teorico = parsed_mmpm["ancho_teorico"]
+            espesor = parsed_mmpm["espesor"]
+            peso = parsed_mmpm["peso"]
+            especificacion = parsed_mmpm["especificacion"]
+            inspeccion = parsed_mmpm["inspeccion"]
 
             payload = {
                 "accion": "registrar_verificacion",
