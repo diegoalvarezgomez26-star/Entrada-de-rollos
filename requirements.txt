@@ -3,3 +3,5 @@ requests
 pandas
 qrcode
 reportlab
+opencv-python-headless
+Pillow
