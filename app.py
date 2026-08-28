@@ -178,6 +178,7 @@ if "paso_verif" not in st.session_state:
 if "datos_verif" not in st.session_state:
     st.session_state["datos_verif"] = {
         "ancho_real": 0.0,
+        "condicion_ok": False,
         "code_molino": "",
         "code_mmpm": "",
         "code_job": "",
@@ -234,7 +235,7 @@ if st.session_state["pantalla_actual"] == "login":
                     )
 
 # ==========================================
-# 2. PANTALLA INICIAL (MENÚ DE OPCIONES)
+# 2. PANTALLA INICIAL (MENÚ DE OPCIONES + TABLA DE ROLLOS)
 # ==========================================
 elif st.session_state["pantalla_actual"] == "menu_principal":
     st.markdown(f"### 👋 Hola {st.session_state['usuario_fullname']}")
@@ -251,6 +252,7 @@ elif st.session_state["pantalla_actual"] == "menu_principal":
         st.session_state["paso_verif"] = 1
         st.session_state["datos_verif"] = {
             "ancho_real": 0.0,
+            "condicion_ok": False,
             "code_molino": "",
             "code_mmpm": "",
             "code_job": "",
@@ -269,6 +271,23 @@ elif st.session_state["pantalla_actual"] == "menu_principal":
         if st.button("🛠️ Panel de Administración", use_container_width=True):
             st.session_state["pantalla_actual"] = "panel_admin"
             st.rerun()
+
+    st.divider()
+
+    # REQUERIMIENTO 2: TABLA DE ROLLOS INGRESADOS A LÍNEA
+    st.subheader("📦 Rollos Ingresados a Línea Slitter")
+    df_rollos = fetch_sheet("Registro_Rollos")
+    if not df_rollos.empty:
+        if "Estatus_Proceso" in df_rollos.columns:
+            df_linea = df_rollos[df_rollos["Estatus_Proceso"] == "Ingresó a Línea"]
+            if not df_linea.empty:
+                st.dataframe(df_linea, use_container_width=True)
+            else:
+                st.info("No hay rollos ingresados a línea en este momento.")
+        else:
+            st.dataframe(df_rollos, use_container_width=True)
+    else:
+        st.info("Sin registros de rollos en la base de datos.")
 
     st.divider()
     if st.button("🚪 Salir de la Cuenta", use_container_width=True):
@@ -304,9 +323,28 @@ elif st.session_state["pantalla_actual"] == "verificacion_pasos":
                 st.session_state["paso_verif"] = 2
                 st.rerun()
 
-    # PASO 2: ETIQUETA MOLINO
+    # PASO 2: VERIFICACIÓN DE CONDICIÓN DEL ROLLO (REQUERIMIENTO 1)
     elif paso == 2:
-        st.subheader("Paso 2: Captura Etiqueta Molino")
+        st.subheader("Paso 2: Inspección de Condición del Rollo")
+        st.write("Verifica físicamente que el rollo cumpla las siguientes condiciones:")
+
+        c1 = st.radio("1. ¿El rollo está libre de óxido?", ["Sí", "No"], index=0)
+        c2 = st.radio("2. ¿El rollo está libre de golpes o deformaciones?", ["Sí", "No"], index=0)
+        c3 = st.radio("3. ¿Los flejes se encuentran sin daños?", ["Sí", "No"], index=0)
+
+        if c1 == "Sí" and c2 == "Sí" and c3 == "Sí":
+            st.success("✅ **Condición física del rollo verificada y correcta.**")
+            if st.button("Continuar ➡️", use_container_width=True, type="primary"):
+                st.session_state["datos_verif"]["condicion_ok"] = True
+                st.session_state["paso_verif"] = 3
+                st.rerun()
+        else:
+            st.error("⛔ **NOTIFICAR DE LA CONDICIÓN DEL ROLLO A CALIDAD O AL SUPERIOR DEL ÁREA**")
+            st.caption("No es posible continuar con el proceso hasta resolver las anomalías detectadas.")
+
+    # PASO 3: ETIQUETA MOLINO
+    elif paso == 3:
+        st.subheader("Paso 3: Captura Etiqueta Molino")
         st.write("Usa la cámara del celular para escanear el código:")
 
         cam_molino = st.camera_input("Escanear Etiqueta Molino", key="cam_molino")
@@ -325,15 +363,13 @@ elif st.session_state["pantalla_actual"] == "verificacion_pasos":
                     "⚠️ Debes capturar o ingresar el código de la Etiqueta Molino."
                 )
             else:
-                st.session_state["datos_verif"]["code_molino"] = (
-                    code_input.strip()
-                )
-                st.session_state["paso_verif"] = 3
+                st.session_state["datos_verif"]["code_molino"] = code_input.strip()
+                st.session_state["paso_verif"] = 4
                 st.rerun()
 
-    # PASO 3: ETIQUETA MMPM
-    elif paso == 3:
-        st.subheader("Paso 3: Captura Etiqueta MMPM")
+    # PASO 4: ETIQUETA MMPM
+    elif paso == 4:
+        st.subheader("Paso 4: Captura Etiqueta MMPM")
         st.write("Usa la cámara del celular para escanear el código:")
 
         cam_mmpm = st.camera_input("Escanear Etiqueta MMPM", key="cam_mmpm")
@@ -353,12 +389,12 @@ elif st.session_state["pantalla_actual"] == "verificacion_pasos":
                 )
             else:
                 st.session_state["datos_verif"]["code_mmpm"] = code_input.strip()
-                st.session_state["paso_verif"] = 4
+                st.session_state["paso_verif"] = 5
                 st.rerun()
 
-    # PASO 4: JOB WORK ORDER
-    elif paso == 4:
-        st.subheader("Paso 4: Captura Job Work Order")
+    # PASO 5: JOB WORK ORDER
+    elif paso == 5:
+        st.subheader("Paso 5: Captura Job Work Order")
         st.write("Usa la cámara para escanear la orden de trabajo:")
 
         cam_job = st.camera_input("Escanear Job Work Order", key="cam_job")
@@ -382,25 +418,25 @@ elif st.session_state["pantalla_actual"] == "verificacion_pasos":
                 )
             else:
                 st.session_state["datos_verif"]["code_job"] = code_input.strip()
-                st.session_state["paso_verif"] = 5
+                st.session_state["paso_verif"] = 6
                 st.rerun()
 
-    # PASO 5: VALIDACIÓN Y EVALUACIÓN
-    elif paso == 5:
+    # PASO 6: VALIDACIÓN Y EVALUACIÓN DE LOS 3 CÓDIGOS QR (REQUERIMIENTO 3)
+    elif paso == 6:
         datos = st.session_state["datos_verif"]
 
-        # Parsear las cadenas escaneadas delimitadas por tuberías '|'
         parsed_molino = parsear_codigo_qr(datos["code_molino"])
         parsed_mmpm = parsear_codigo_qr(datos["code_mmpm"])
+        parsed_job = parsear_codigo_qr(datos["code_job"])
 
-        # Comparar únicamente los identificadores únicos extraídos
         id_molino = parsed_molino["id_rollo"].upper()
         id_mmpm = parsed_mmpm["id_rollo"].upper()
+        id_job = parsed_job["id_rollo"].upper()
 
-        if id_molino == id_mmpm and id_mmpm != "":
+        # REQUERIMIENTO 3: Los 3 códigos QR deben coincidir obligatoriamente
+        if id_molino == id_mmpm == id_job and id_mmpm != "":
             st.success("✅ **DATOS OK: VERIFICACIÓN CORRECTA**")
 
-            # Extracción de variables limpias desglosadas
             id_rollo = parsed_mmpm["id_rollo"]
             ancho_teorico = parsed_mmpm["ancho_teorico"]
             espesor = parsed_mmpm["espesor"]
@@ -411,6 +447,7 @@ elif st.session_state["pantalla_actual"] == "verificacion_pasos":
             payload = {
                 "accion": "registrar_verificacion",
                 "ID_Rollo": id_rollo,
+                "Condicion_Rollo": "OK",
                 "Ancho_Teorico": ancho_teorico,
                 "Ancho_Real": str(datos["ancho_real"]),
                 "Espesor": espesor,
