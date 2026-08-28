@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 import qrcode
+from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import cm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
@@ -107,13 +108,13 @@ def parsear_codigo_qr(texto):
 
 
 def generar_pdf_etiqueta_bytes(
-    id_rollo, ancho, ancho_real, espesor, inspeccion
+    id_rollo, ancho, ancho_real, espesor, peso, inspeccion
 ):
-    """Genera la etiqueta en PDF (10 cm x 20 cm) codificando SOLO el ID_Rollo en el QR para lectura ultrarrápida."""
+    """Genera la etiqueta PDF en Hoja Tamaño Carta, con título 'MMPM', letra 16pt para visión media e inclusión del peso."""
     buffer = io.BytesIO()
-    ancho_pdf, largo_pdf = 10 * cm, 20 * cm
+    ancho_pdf, largo_pdf = letter  # Tamaño Carta (8.5" x 11")
 
-    qr = qrcode.QRCode(box_size=8, border=2)
+    qr = qrcode.QRCode(box_size=10, border=2)
     qr.add_data(id_rollo)
     qr.make(fit=True)
     img_qr = qr.make_image(fill_color="black", back_color="white")
@@ -122,38 +123,37 @@ def generar_pdf_etiqueta_bytes(
     img_qr.save(qr_buffer, format="PNG")
     qr_buffer.seek(0)
 
-    c = canvas.Canvas(buffer, pagesize=(ancho_pdf, largo_pdf))
-    c.setFont("Helvetica-Bold", 14)
-    c.drawCentredString(ancho_pdf / 2, largo_pdf - 1.2 * cm, "MMPM - SLITTER 1")
-    c.setFont("Helvetica-Bold", 10)
-    c.drawCentredString(
-        ancho_pdf / 2, largo_pdf - 1.8 * cm, "ETIQUETA DE ROLLO DESEMPACADO"
-    )
-    c.line(
-        0.5 * cm, largo_pdf - 2.1 * cm, ancho_pdf - 0.5 * cm, largo_pdf - 2.1 * cm
-    )
+    c = canvas.Canvas(buffer, pagesize=letter)
 
-    c.setFont("Helvetica-Bold", 11)
-    y = largo_pdf - 3.2 * cm
+    # 1. Título superior ("MMPM" sin línea divisoria)
+    c.setFont("Helvetica-Bold", 30)
+    c.drawCentredString(ancho_pdf / 2, largo_pdf - 3 * cm, "MMPM")
+
+    # 2. Información del rollo (letra ampliada a 16pt para lectura fácil a distancia)
+    c.setFont("Helvetica-Bold", 16)
+    y = largo_pdf - 5.5 * cm
     datos = [
         f"ID ROLLO: {id_rollo}",
         f"ANCHO TEÓRICO: {ancho} mm",
         f"ANCHO REAL: {ancho_real} mm",
         f"ESPESOR: {espesor} mm",
+        f"PESO: {peso} kg",
         f"INSPECCIÓN: {inspeccion}",
     ]
 
     for linea in datos:
-        c.drawString(0.8 * cm, y, linea)
-        y -= 0.85 * cm
+        c.drawString(2.5 * cm, y, linea)
+        y -= 1.1 * cm
 
+    # 3. Código QR (12 cm x 12 cm) centrado en la mitad inferior de la página
+    qr_size = 12 * cm
     qr_img_reader = ImageReader(qr_buffer)
     c.drawImage(
         qr_img_reader,
-        (ancho_pdf - 6.5 * cm) / 2,
-        1.2 * cm,
-        width=6.5 * cm,
-        height=6.5 * cm,
+        (ancho_pdf - qr_size) / 2,
+        2.5 * cm,
+        width=qr_size,
+        height=qr_size,
     )
 
     c.showPage()
@@ -274,7 +274,6 @@ elif st.session_state["pantalla_actual"] == "menu_principal":
 
     st.divider()
 
-    # REQUERIMIENTO 2: TABLA DE ROLLOS INGRESADOS A LÍNEA
     st.subheader("📦 Rollos Ingresados a Línea Slitter")
     df_rollos = fetch_sheet("Registro_Rollos")
     if not df_rollos.empty:
@@ -323,7 +322,7 @@ elif st.session_state["pantalla_actual"] == "verificacion_pasos":
                 st.session_state["paso_verif"] = 2
                 st.rerun()
 
-    # PASO 2: VERIFICACIÓN DE CONDICIÓN DEL ROLLO (REQUERIMIENTO 1)
+    # PASO 2: VERIFICACIÓN DE CONDICIÓN DEL ROLLO
     elif paso == 2:
         st.subheader("Paso 2: Inspección de Condición del Rollo")
         st.write("Verifica físicamente que el rollo cumpla las siguientes condiciones:")
@@ -421,7 +420,7 @@ elif st.session_state["pantalla_actual"] == "verificacion_pasos":
                 st.session_state["paso_verif"] = 6
                 st.rerun()
 
-    # PASO 6: VALIDACIÓN Y EVALUACIÓN DE LOS 3 CÓDIGOS QR (REQUERIMIENTO 3)
+    # PASO 6: VALIDACIÓN Y EVALUACIÓN DE LOS 3 CÓDIGOS QR
     elif paso == 6:
         datos = st.session_state["datos_verif"]
 
@@ -433,7 +432,6 @@ elif st.session_state["pantalla_actual"] == "verificacion_pasos":
         id_mmpm = parsed_mmpm["id_rollo"].upper()
         id_job = parsed_job["id_rollo"].upper()
 
-        # REQUERIMIENTO 3: Los 3 códigos QR deben coincidir obligatoriamente
         if id_molino == id_mmpm == id_job and id_mmpm != "":
             st.success("✅ **DATOS OK: VERIFICACIÓN CORRECTA**")
 
@@ -466,11 +464,12 @@ elif st.session_state["pantalla_actual"] == "verificacion_pasos":
                 ancho_teorico,
                 datos["ancho_real"],
                 espesor,
+                peso,
                 inspeccion,
             )
 
             st.download_button(
-                label="📄 Imprimir / Descargar Etiqueta PDF (10x20 cm)",
+                label="📄 Imprimir / Descargar Etiqueta PDF (Tamaño Carta)",
                 data=pdf_bytes,
                 file_name=f"Etiqueta_{id_rollo}.pdf",
                 mime="application/pdf",
