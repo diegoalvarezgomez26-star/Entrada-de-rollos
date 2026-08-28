@@ -110,7 +110,7 @@ def parsear_codigo_qr(texto):
 def generar_pdf_etiqueta_bytes(
     id_rollo, ancho, ancho_real, espesor, peso, inspeccion
 ):
-    """Genera la etiqueta PDF en Hoja Tamaño Carta, con título 'MMPM', letra 16pt para visión media e inclusión del peso."""
+    """Genera la etiqueta PDF en Hoja Tamaño Carta con título MMPM + ETIQUETA DE ROLLO DESEMPACADO y datos ampliados."""
     buffer = io.BytesIO()
     ancho_pdf, largo_pdf = letter  # Tamaño Carta (8.5" x 11")
 
@@ -125,11 +125,15 @@ def generar_pdf_etiqueta_bytes(
 
     c = canvas.Canvas(buffer, pagesize=letter)
 
-    # 1. Título superior ("MMPM" sin línea divisoria)
-    c.setFont("Helvetica-Bold", 30)
-    c.drawCentredString(ancho_pdf / 2, largo_pdf - 3 * cm, "MMPM")
+    # 1. Encabezado con título principal y subtítulo
+    c.setFont("Helvetica-Bold", 28)
+    c.drawCentredString(ancho_pdf / 2, largo_pdf - 2.5 * cm, "MMPM")
+    c.setFont("Helvetica-Bold", 16)
+    c.drawCentredString(
+        ancho_pdf / 2, largo_pdf - 3.5 * cm, "ETIQUETA DE ROLLO DESEMPACADO"
+    )
 
-    # 2. Información del rollo (letra ampliada a 16pt para lectura fácil a distancia)
+    # 2. Información del rollo (fuente de 16pt para visión clara a distancia)
     c.setFont("Helvetica-Bold", 16)
     y = largo_pdf - 5.5 * cm
     datos = [
@@ -145,13 +149,13 @@ def generar_pdf_etiqueta_bytes(
         c.drawString(2.5 * cm, y, linea)
         y -= 1.1 * cm
 
-    # 3. Código QR (12 cm x 12 cm) centrado en la mitad inferior de la página
+    # 3. Código QR (12 cm x 12 cm) centrado en la parte inferior de la hoja
     qr_size = 12 * cm
     qr_img_reader = ImageReader(qr_buffer)
     c.drawImage(
         qr_img_reader,
         (ancho_pdf - qr_size) / 2,
-        2.5 * cm,
+        2.0 * cm,
         width=qr_size,
         height=qr_size,
     )
